@@ -6,7 +6,7 @@ use warnings;
 use FindBin;
 use lib $FindBin::Bin . "/../lib";
 
-use Test::More tests => 10;
+use Test::More tests => 11;
 use Test::Exception;
 
 # this requires that demo.review-board.org is set up properly:
@@ -24,7 +24,9 @@ use WebService::ReviewBoard;
 
 ok( my $rb = WebService::ReviewBoard->new( 'http://demo.review-board.org' ), "created new WebService::ReviewBoard object" );
 ok( $rb->login( 'jay', 'password' ), 'logged in' );
-ok( my $review = $rb->create_review( [ repository_id => 1 ] ), "created review");
+ok( my $review = WebService::ReviewBoard::Review->create( { review_board => $rb }, [ repository_id => 1 ] ), "created review");
+
+
 ok( $review->get_id() =~ /^\d+$/, "review has an id that is a number" );
 
 ok( $review->add_diff( $FindBin::Bin . "/files/foo.patch", '/trunk/reviewboard/' ), "adding a new diff" );
@@ -34,4 +36,8 @@ ok( $review->set_summary( "this is the summary" ), "set the description" );
 
 ok( $review->set_bugs( 1728212, 1723823  ), "setting bugs");
 ok( $review->set_reviewers( qw( jaybuff ) ), "setting reviewers");
+ok( $review->set_groups( qw(reviewboard) ), "setting groups");
 ok( $review->publish(), "publish" );
+
+$review->discard_review_request;
+

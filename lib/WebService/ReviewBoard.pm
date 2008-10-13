@@ -8,29 +8,30 @@ use Data::Dumper;
 use Log::Log4perl qw(:easy);
 use HTTP::Request::Common;
 use LWP::UserAgent;
-use version; our $VERSION = qv('0.0.1');
+use version; our $VERSION = qv('0.0.3');
 
 use WebService::ReviewBoard::Review;
-use vars qw($REVIEW_BOARD_URL);
 
 sub new {
-	my $proto = shift;
-	$REVIEW_BOARD_URL = shift or LOGDIE "usage: " .  __PACKAGE__ . "->new( 'http://demo.review-board.org' );";
+	my $proto            = shift;
+	my $review_board_url = shift
+	  or LOGDIE "usage: " . __PACKAGE__ . "->new( 'http://demo.review-board.org' );";
 
 	my $class = ref $proto || $proto;
-	my $self = {};
+	my $self = { review_board_url => $review_board_url, };
 
 	return bless $self, $class;
 }
 
-# this is a class method
 sub get_review_board_url {
-    # blech, globals.  lame.
-	if ( !$REVIEW_BOARD_URL ) {
-		LOGDIE "get_review_board_url(): please first construct a WebService::ReviewBoard object";
+	my $self = shift;
+
+	my $url = $self->{review_board_url};
+	if ( !$url || $url !~ m#^http://# ) {
+		LOGDIE "get_review_board_url(): url you passed to new() ($url) looks invalid";
 	}
 
-	return $REVIEW_BOARD_URL;
+	return $url;
 }
 
 sub login {
@@ -38,8 +39,8 @@ sub login {
 	my $username = shift or LOGCROAK "you must pass WebService::ReviewBoard->login a username";
 	my $password = shift or LOGCROAK "you must pass WebService::ReviewBoard->login a password";
 
-	my $json = _api_post(
-		$self->_get_ua(),
+	my $json = $self->api_post(
+		$self->get_ua(),
 		'/api/json/accounts/login/',
 		[
 			username => $username,
@@ -50,30 +51,34 @@ sub login {
 	return 1;
 }
 
-sub create_review {
+sub api_post {
 	my $self = shift;
-	my $args = shift;
-
-	my $ua = $self->_get_ua();
-	my $json = _api_post( $ua, '/api/json/reviewrequests/new/', $args );
-
-	if ( !$json->{review_request} ) {
-		LOGDIE "create_review couldn't determine ID from this JSON that it got back from the server: " . Dumper $json;
-	}
-
-	return bless { ua => $ua, id => $json->{review_request}->{id} }, 'WebService::ReviewBoard::Review';
-
+	$self->api_call( shift, shift, 'POST', @_ );
 }
 
-# this is a class method
-sub _api_post {
-	my $ua   = shift or LOGCONFESS "_api_post needs an LWP::UserAgent as first arg";
-	my $path = shift or LOGDIE "No path to _api_post";
-	my @post_options = @_;
+sub api_get {
+	my $self = shift;
+	$self->api_call( shift, shift, 'GET', @_ );
+}
 
-    
-	my $url = get_review_board_url() . $path;
-	my $request = POST( $url, @post_options );
+sub api_call {
+	my $self    = shift;
+	my $ua      = shift or LOGCONFESS "api_call needs an LWP::UserAgent";
+	my $path    = shift or LOGDIE "No url path to api_post";
+	my $method  = shift or LOGDIE "no method (POST or GET)";
+	my @options = @_;
+
+	my $url = $self->get_review_board_url() . $path;
+	my $request;
+	if ( $method eq "POST" ) {
+		$request = POST( $url, @options );
+	}
+	elsif ( $method eq "GET" ) {
+		$request = GET( $url, @options );
+	}
+	else {
+		LOGDIE "Unknown method $method.  Valid methods are GET or POST";
+	}
 	DEBUG "Doing request:\n" . $request->as_string();
 	my $response = $ua->request($request);
 	DEBUG "Got response:\n" . $response->as_string();
@@ -94,8 +99,9 @@ sub _api_post {
 	return $json;
 }
 
-sub _get_ua {
-	my $self = shift or LOGCROAK "you must call _get_ua as a method";
+# you can overload this method if you want to use a different useragent
+sub get_ua {
+	my $self = shift or LOGCROAK "you must call get_ua as a method";
 
 	if ( !$self->{ua} ) {
 		$self->{ua} = LWP::UserAgent->new( cookie_jar => {}, );
@@ -115,7 +121,7 @@ WebService::ReviewBoard - Perl library to talk to a review board installation th
 
 =head1 VERSION
 
-This document describes WebService::ReviewBoard version 0.0.1
+This document describes WebService::ReviewBoard version 0.0.3
 
 =head1 SYNOPSIS
 
@@ -139,20 +145,26 @@ Patches welcome!
 
 =over 
 
-=item C<< create_review( $args ) >>
-
-Must pass in which repository to use.  Using one of these (from the API documentation):
-
-    * repository_path: The repository to create the review request against. If not specified, the DEFAULT_REPOSITORY_PATH setting will be used. If both this and repository_id are set, repository_path's value takes precedence.
-    * repository_id: The ID of the repository to create the review request against. 
-
-Example:
-
-    my $review = $rb->create_review( [ respository_id => 1 ] );
-
 =item C<< get_review_board_url >>
 
 =item C<< login >>
+
+=item C<< get_ua >>
+
+Returns an LWP::UserAgent object.  You can override this method in a subclass if
+you need to use a different LWP::UserAgent.
+
+=item C<< api_post >>
+
+Do the HTTP POST to the reviewboard API.
+
+=item C<< api_get >>
+
+Same as api_post, but do it with an HTTP GET
+
+=item C<< my $json = $rb->api_call( $ua, $path, $method, @options ) >>
+
+api_post and api_get use this internally
 
 =back
 
@@ -160,21 +172,21 @@ Example:
 
 =over
 
+=item C<< "Unknown method %s.  Valid methods are GET or POST" >>
+
 =item C<< "you must pass WebService::ReviewBoard->new a username" >>
 
 =item C<< "you must pass WebService::ReviewBoard->new a password" >>
 
-=item C<< "create_review couldn't determine ID from this JSON that it got back from the server: %s" >>
+=item C<< "api_post needs an LWP::UserAgent" >>
 
-=item C<< "_api_post needs an LWP::UserAgent as first arg" >>
-
-=item C<< "No path to _api_post" >>
+=item C<< "No url path to api_post" >>
 
 =item C<< "Error fetching %s: %s" >>
 
 =item C<< "you must call %s as a method" >>
 
-=item C<< "get_review_board_url(): please first construct a WebService::ReviewBoard object" >>
+=item C<< "get_review_board_url(): url you passed to new() ($url) looks invalid" >>
 
 =item C<< "Need a field name at (eval 38) line 1" >>
 
